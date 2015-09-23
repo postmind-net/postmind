@@ -12,10 +12,10 @@ from sqlalchemy.sql.expression import func
 import logging
 from logging.handlers import RotatingFileHandler
 import numpy as np
-from joblib import Parallel, delayed
+
 from .column import Column
 from .table import Table
-from utils import gen_table_name
+from utils import gen_table_name, pgapply
 
 queries_templates = {
     "column": {
@@ -125,26 +125,6 @@ logger.addHandler(file_handler)
 
 
 
-def execute_query(q):
-    con = sa.create_engine("postgresql://matthieu:@localhost/pom")
-    con.execute(q)
-    return True
-
-def execute_queries(queries, n_jobs=4):
-    execute_query(queries[0])
-    results = Parallel(n_jobs=n_jobs)(delayed(execute_query)(q) for q in queries[1:])
-    return results
-
-def process_query(q):
-    import sqlalchemy as sa
-    try:
-        con = sa.create_engine("postgresql://matthieu:@localhost/pom")
-        df = pd.io.sql.read_sql(q[0], con)
-    except:
-        logging.error("Cannot run queries %d" %q[1])
-        raise Exception("Cannot run queries %d" %q[1])
-    return df
-
 
 class TableSet(object):
     """
@@ -229,36 +209,7 @@ class PostmindContext(object):
         del self.con
 
     def apply(self, fun, *args, **kwargs):
-        import dill
-        import base64
-
-        otype = kwargs.pop("otype", "setof jsonb")
-        metadata = kwargs.pop("meta", None)
-        funname = fun.__name__
-        query = """
-create or replace function {name} (inargs jsonb) returns {otype} as
-$$
-import sys
-sys.argv = []
-import base64
-from json import loads, dumps
-from postmind import pg
-
-if '{name}' not in SD:
-  import dill
-  SD['{name}'] = dill.loads(base64.decodestring('''{code}'''))
-args, kwargs = loads(inargs)
-
-return SD['{name}'](*args, **kwargs)
-$$ language plpythonu security definer;
-""".format(name=funname, otype=otype, code=base64.encodestring(dill.dumps(fun)))
-        self.con.execute(query)
-        query = "{name}('{args}')".format(name=funname, args=json.dumps((args, kwargs)))
-#        return #Table(self.con, gen_table_name()
-        if metadata == None:
-            q = sa.select(['*']).select_from(query)
-        else:
-            q = sa.select(["'%s'::jsonb as meta" %json.dumps(metadata), '*']).select_from(query)
+        q = pgapply(self, fun, *args, **kwargs)
         return Table(self, gen_table_name(), q)
 
     def load_credentials(self, profile="default"):

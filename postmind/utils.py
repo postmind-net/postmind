@@ -6,6 +6,8 @@ import base64
 import sqlalchemy as sa
 import json
 from sqlalchemy.sql.expression import func
+from joblib import Parallel, delayed
+import pandas as pd
 
 def gen_table_name(prefix="tbl_"):
     return prefix + str(uuid.uuid4()).replace("-", "_")
@@ -34,6 +36,7 @@ def pgapply(ctx, fun, *args, **kwargs):
 
     otype = kwargs.pop("otype", "setof jsonb")
     metadata = kwargs.pop("meta", None)
+    index = kwargs.pop("index", None)
     funname = fun.__name__
     query = """create or replace function {name} (inargs jsonb) returns {otype} as
 $$
@@ -55,9 +58,31 @@ $$ language plpythonu security definer;
 #    query = "{name}('{args}')".format(name=funname, args=json.dumps((args, kwargs)))
 #        return #Table(self.con, gen_table_name()
     query = func.__getattr__(funname)(json.dumps((args, kwargs)))
-    if metadata == None:
-        q = sa.select(['*']).select_from(query)
-    else:
-        q = sa.select(["'%s'::jsonb as meta" %json.dumps(metadata), '*']).select_from(query)
+    selcols = ['*']
+    if metadata != None:
+        selcols = ["'%s'::jsonb as meta" %json.dumps(metadata)] + selcols
+    if index != None:
+        selcols = ["%d as index" %index] + selcols
+    q = sa.select(selcols).select_from(query)
     return q
+
+
+def execute_query(q):
+    con = sa.create_engine("postgresql://matthieu:@localhost/pom")
+    con.execute(q)
+    return True
+
+def execute_queries(queries, n_jobs=4):
+    execute_query(queries[0])
+    results = Parallel(n_jobs=n_jobs)(delayed(execute_query)(q) for q in queries[1:])
+    return results
+
+def process_query(q):
+    import sqlalchemy as sa
+    try:
+        con = sa.create_engine("postgresql://matthieu:@localhost/pom")
+        df = pd.io.sql.read_sql(q[0], con)
+    except:
+        raise Exception("Cannot run queries %d %s" %(q[1], q[0]))
+    return df
 

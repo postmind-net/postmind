@@ -7,7 +7,7 @@ from sqlalchemy.sql.expression import func
 import logging
 import numpy as np
 from joblib import Parallel, delayed
-from .utils import pgapply, gen_table_name, cached_property
+from .utils import pgapply, gen_table_name, cached_property, process_query
 from pobject import PObject
 
 class Column(PObject):
@@ -98,10 +98,12 @@ class Column(PObject):
     def ndims(self, limit=100):
         try:
             if self.data.type.python_type is list:
-                df = pd.io.sql.read_sql(sa.select([func.max(func.array_ndims(self.data)).label("ndims")]),
-                                        self.ctx)
+                df = self.ctx.read_sql(sa.select([func.max(func.array_ndims(self.data)).label("ndims")]))
                 return df.values[0][0]
-        except:
+            else:
+                return 0
+        except Exception, ex:
+            print ex
             return 0
 
     def summary(self, count=32, out_table=None, prange=None, pjob=4):
